@@ -1,91 +1,106 @@
 import cv2
 import numpy as np
+import os
+import pandas as pd
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Conv2D, MaxPooling2D, Flatten, Dense
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
 from sklearn.model_selection import train_test_split
-from sklearn.tree import DecisionTreeClassifier
 
-# Group containers into rows based on similar y-coordinates
-def group_containers_by_rows(container_rects, tolerance=20):
-    container_rects = sorted(container_rects, key=lambda x: x[1])  # Sort by y-coordinate
-    rows = []
-    current_row = [container_rects[0]]
-    
-    for rect in container_rects[1:]:
-        if abs(rect[1] - current_row[0][1]) <= tolerance:
-            current_row.append(rect)
-        else:
-            rows.append(current_row)
-            current_row = [rect]
-    
-    if current_row:
-        rows.append(current_row)
-    
-    return rows
-
-# Function to detect containers and measure gaps
-def detect_container_gaps(image_path):
-    # Load image and convert to grayscale
+def preprocess_image(image_path, target_size=(256, 256)):
     image = cv2.imread(image_path)
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     
-    # Apply edge detection
-    edges = cv2.Canny(gray, threshold1=50, threshold2=150)
+    # Resize to focus on a single row of containers
+    height, width = gray.shape
+    row_height = height // 10  # Assuming each row is roughly 1/10th of the image height
+    resized = cv2.resize(gray[row_height:2*row_height, :], target_size)
     
-    # Find contours (edges of containers)
+    blurred = cv2.GaussianBlur(resized, (5, 5), 0)
+    edges = cv2.Canny(blurred, 50, 150)
+    
+    # Find contours
     contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
-    # Store the bounding rectangles of containers
-    container_rects = []
-    for contour in contours:
-        x, y, w, h = cv2.boundingRect(contour)
-        if w > 18 and h > 18:  # Filter based on minimum size (tune as needed)
-            container_rects.append((x, y, w, h))
-
-    # Group containers into rows
-    rows = group_containers_by_rows(container_rects)
+    # Calculate average gap between contours
+    if len(contours) > 1:
+        gaps = []
+        for i in range(1, len(contours)):
+            x1, y1, w1, h1 = cv2.boundingRect(contours[i-1])
+            x2, y2, w2, h2 = cv2.boundingRect(contours[i])
+            gap = x2 - (x1 + w1)
+            gaps.append(gap)
+        avg_gap = np.mean(gaps)
+    else:
+        avg_gap = 0
     
-    all_gaps = []  # List to store gaps between all containers
-    
-    # Calculate gaps between containers within each row
-    for row in rows:
-        row = sorted(row, key=lambda x: x[0])  # Sort containers in the row by x-coordinate
-        row_gaps = []
-        for i in range(1, len(row)):
-            gap = row[i][0] - (row[i-1][0] + row[i-1][2])
-            if gap > 0:  # Only count positive gaps
-                row_gaps.append(gap)
-        
-        if row_gaps:
-            all_gaps.extend(row_gaps)  # Add gaps from this row to the total list
-    
-    # Return the average gap size of all containers
-    if all_gaps:
-        avg_gap = np.mean(all_gaps)
-        return avg_gap
-    return 0  # Return 0 if no valid gaps are found
+    return edges, avg_gap
 
-# Example dataset of images with labels (1 = Straddle, 0 = RMG)
-images = ['1.png', '2.png', '3.png', "4.png", "5.png", "6.png", "7.png", "8.png", "9.png", "13.png", "14.png"]  # Add paths to your images
-labels = [0, 1, 0, 1, 0, 0, 0, 1, 1, 1, 1]  # Labels corresponding to each image, 1 = Straddle, 0 = RMG
+def load_data(image_dir, labels_file, target_size=(256, 256)):
+    images = []
+    labels = []
+    gaps = []
+    labels_df = pd.read_csv(labels_file)
+    for _, row in labels_df.iterrows():
+        image_name = row['filename']
+        label = row['label']
+        image_path = os.path.join(image_dir, image_name)
+        if os.path.exists(image_path):
+            edges, avg_gap = preprocess_image(image_path, target_size)
+            images.append(edges)
+            labels.append(label)
+            gaps.append(avg_gap)
+    images = np.array(images)
+    labels = np.array(labels)
+    gaps = np.array(gaps)
+    images = images.reshape(images.shape[0], images.shape[1], images.shape[2], 1)
+    return images, labels, gaps
 
-# Extract features (average gap size for each image)
-features = [detect_container_gaps(img) for img in images]
+def create_model():
+    model = Sequential([
+        Conv2D(32, (3, 3), activation='relu', input_shape=(256, 256, 1)),
+        MaxPooling2D((2, 2)),
+        Conv2D(64, (3, 3), activation='relu'),
+        MaxPooling2D((2, 2)),
+        Flatten(),
+        Dense(128, activation='relu'),
+        Dense(1, activation='sigmoid')
+    ])
+    model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+    return model
 
-# Train a simple classifier on the images
-X_train = np.array(features).reshape(-1, 1)  # Reshape to match sklearn's expected input
-y_train = labels  # The corresponding labels (1 for Straddle, 0 for RMG)
+# Load and preprocess data
+image_dir = '.'  # Current directory
+labels_file = 'labels.csv'  # Path to the CSV file with labels
+images, labels, gaps = load_data(image_dir, labels_file)
 
-clf = DecisionTreeClassifier()  # Initialize Decision Tree Classifier
-clf.fit(X_train, y_train)  # Train the model using the gap features
+# Split data into training and validation sets
+X_train, X_val, y_train, y_val = train_test_split(images, labels, test_size=0.2, random_state=42)
 
-# Test the classifier on a new image (port_image9.png)
-new_image = '15.png'
-new_image_gap = detect_container_gaps(new_image)  # Calculate the average gap size for the new image
+# Data augmentation
+datagen = ImageDataGenerator(rescale=1./255)
+train_generator = datagen.flow(X_train, y_train, batch_size=32)
+val_generator = datagen.flow(X_val, y_val, batch_size=32)
 
-# Predict whether it's a Straddle Carrier (1) or RMG Crane (0)
-classification = clf.predict([[new_image_gap]])
+# Create and train the model
+model = create_model()
+model.fit(train_generator, epochs=10, validation_data=val_generator)
 
-# Output the result
-if classification == 1:
-    print(f"Straddle Carriers detected in {new_image} (Average gap: {new_image_gap} pixels)")
-else:
-    print(f"RMG Crane detected in {new_image} (Average gap: {new_image_gap} pixels)")
+# Save the model
+model.save('container_classifier_model.h5')
+
+# Example prediction
+def classify_image(image_path, model):
+    edges, avg_gap = preprocess_image(image_path)
+    edges = edges.reshape(1, edges.shape[0], edges.shape[1], 1) / 255.0
+    prediction = model.predict(edges)
+    return 'RMG' if prediction < 0.5 else 'Straddle'
+
+# Load the trained model
+from tensorflow.keras.models import load_model
+model = load_model('container_classifier_model.h5')
+
+# Classify a new image
+image_path = '63.png'  # Example image
+classification = classify_image(image_path, model)
+print(f'The image is classified as: {classification}')
