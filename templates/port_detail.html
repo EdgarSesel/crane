@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Port Details</title>
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body>
+    <!-- Navbar -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary mb-4">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="/">Port Information</a>
+        </div>
+    </nav>
+
+    <div class="container">
+        <div class="row justify-content-center">
+            <div class="col-lg-8">
+                <h1 class="text-center mb-4 display-6" id="portName">Port Details</h1>
+
+                <!-- Search Input -->
+                <div class="input-group mb-4">
+                    <input type="text" class="form-control" id="searchInput" placeholder="Search row names...">
+                </div>
+
+                <!-- Bootstrap Card to Display Port Details -->
+                <div class="card shadow-sm">
+                    <div class="card-header bg-primary text-white">
+                        <h2 class="h5 mb-0">Detailed Information</h2>
+                    </div>
+                    <div class="card-body">
+                        <table class="table table-hover table-bordered">
+                            <tbody id="portDetails">
+                                <!-- Port details will be populated here -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Pagination Controls -->
+                <nav aria-label="Page navigation" class="mt-4">
+                    <ul class="pagination justify-content-center" id="paginationControls">
+                        <!-- Pagination items will be populated here -->
+                    </ul>
+                </nav>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bootstrap 5 JS and dependencies -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <!-- jQuery -->
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+
+    
+
+    <script>
+        $(document).ready(function() {
+            var portId = window.location.pathname.split('/').pop();
+            var rowsPerPage = 10;
+            var currentPage = 1;
+            var portDetails = [];
+            var filteredDetails = [];
+
+            function displayPage(page) {
+                var start = (page - 1) * rowsPerPage;
+                var end = start + rowsPerPage;
+                var rows = filteredDetails.slice(start, end);
+
+                $('#portDetails').empty();
+                rows.forEach(function(row) {
+                    $('#portDetails').append(
+                        `<tr>
+                            <th class="fw-bold">${row.key}</th>
+                            <td>${row.value}</td>
+                        </tr>`
+                    );
+                });
+            }
+
+            function setupPagination(totalRows) {
+                var totalPages = Math.ceil(totalRows / rowsPerPage);
+                $('#paginationControls').empty();
+
+                for (var i = 1; i <= totalPages; i++) {
+                    $('#paginationControls').append(
+                        `<li class="page-item ${i === currentPage ? 'active' : ''}">
+                            <a class="page-link" href="#">${i}</a>
+                        </li>`
+                    );
+                }
+
+                $('.page-link').click(function(e) {
+                    e.preventDefault();
+                    currentPage = parseInt($(this).text());
+                    displayPage(currentPage);
+                    $('.page-item').removeClass('active');
+                    $(this).parent().addClass('active');
+                });
+            }
+
+            function filterRows() {
+                var searchTerm = $('#searchInput').val().toLowerCase();
+                filteredDetails = portDetails.filter(function(row) {
+                    return row.key.toLowerCase().includes(searchTerm);
+                });
+                setupPagination(filteredDetails.length);
+                displayPage(1);
+            }
+
+            $('#searchInput').on('input', function() {
+                filterRows();
+            });
+
+            $.ajax({
+                url: "/port_data/" + portId,
+                method: "GET",
+                success: function(data) {
+                    $('#portName').text(data['Main Port Name']);
+                    for (var key in data) {
+                        portDetails.push({ key: key, value: data[key] });
+                    }
+                    filteredDetails = portDetails;
+                    setupPagination(filteredDetails.length);
+                    displayPage(currentPage);
+                },
+                error: function(xhr, status, error) {
+                    console.error("Error fetching port data:", error);
+                }
+            });
+        });
+    </script>
+</body>
+</html>
